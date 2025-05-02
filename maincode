@@ -1,0 +1,96 @@
+// 1. Define custom rectangular region
+var regionBounds = ee.Geometry.Rectangle([73.4766, 31.5967, 111.1816, 49.1748]);
+
+// 2. Load and filter Sentinel-2 L2A data
+var collection = ee.ImageCollection('COPERNICUS/S2_SR')
+    .filterDate('2024-01-01', '2024-12-31')  // Date range for the year 2024
+    .filterBounds(regionBounds)  // Apply region bounds filter
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))  // Filter cloudy images (less than 10% cloud cover)
+    .select(['B2', 'B3', 'B4', 'B8']);  // Select relevant bands (B2 = Blue, B3 = Green, B4 = Red, B8 = NIR)
+
+// 3. Visual check (optional)
+Map.addLayer(collection.median(), {bands: ['B4', 'B3', 'B2'], min: 0, max: 3000}, 'Custom Region');  // Display RGB composite
+Map.centerObject(regionBounds, 5);  // Center map on the region
+
+// 4. Retrieve coordinates of the rectangular region
+var coords = regionBounds.coordinates().getInfo();  // Retrieve coordinates
+print('Coordinates: ', coords);  // Print coordinates
+
+// 5. Verify coordinates and extract the bottom-left and top-right coordinates
+if (!coords || !coords[0]) {
+  throw new Error('Failed to get coordinates from regionBounds');
+}
+var lonMin = coords[0][0][0];  // Bottom-left longitude
+var latMin = coords[0][0][1];  // Bottom-left latitude
+var lonMax = coords[0][2][0];  // Top-right longitude
+var latMax = coords[0][2][1];  // Top-right latitude
+print('Bounding Box: ', {lonMin: lonMin, latMin: latMin, lonMax: lonMax, latMax: latMax});
+
+// 6. Create grid for tiling
+var gridSize = 1;  // Grid size in degrees
+var tiles = [];
+for (var x = lonMin; x < lonMax; x += gridSize) {
+    for (var y = latMin; y < latMax; y += gridSize) {
+        var tile = ee.Geometry.Rectangle([x, y, x + gridSize, y + gridSize]);
+        tiles.push(tile);
+    }
+}
+print('Total tiles created: ', tiles.length);
+
+// 7. Define batch parameters (684 tiles, batch size = 5)
+var batchSize = 5;  // Number of tiles per batch
+var startIndex = 0;  // Manually adjust start index (e.g., 0, 5, 10, etc.)
+var endIndex = Math.min(startIndex + batchSize, tiles.length);  // End index for the batch
+
+// 8. Export current batch of tiles
+var tileList = ee.List(tiles);
+var batchTiles = tileList.slice(startIndex, endIndex);  // Slice the batch
+batchTiles.evaluate(function(tilesClient) {
+    tilesClient.forEach(function(tile, index) {
+        var globalIndex = startIndex + index;
+
+        // Retrieve coordinates for the tile (client-side)
+        var tileCoords = ee.Geometry(tile).coordinates().getInfo();
+        if (!tileCoords || !tileCoords[0]) {
+            print('Failed to get coordinates for tile: ', globalIndex);
+            return;
+        }
+
+        var tileLonMin = tileCoords[0][0][0];
+        var tileLatMin = tileCoords[0][0][1];
+        var tileLonMax = tileCoords[0][2][0];
+        var tileLatMax = tileCoords[0][2][1];
+
+        // Format coordinates for tile name (avoid using dot "." in names)
+        function formatCoord(num) {
+            return num.toFixed(2).replace('.', 'p');  // Replace dot with 'p' for consistency
+        }
+
+        var tileName = 'Tile_' +
+            formatCoord(tileLonMin) + '_' +
+            formatCoord(tileLatMin) + '_' +
+            formatCoord(tileLonMax) + '_' +
+            formatCoord(tileLatMax);
+
+        // Get current tile number and remaining tiles
+        var remainingTiles = tiles.length - globalIndex - 1;
+        print('Exporting tile: ' + tileName);
+        print('Current tile: ' + globalIndex + ' of ' + tiles.length + '. Remaining: ' + remainingTiles);
+
+        var clippedImage = collection.median().clip(ee.Geometry(tile));  // Clip the image for the current tile
+
+        // Export the tile to Google Drive
+        Export.image.toDrive({
+            image: clippedImage,
+            description: 'S2_2024_' + tileName,
+            folder: 'Sentinel2_CustomRegion',  // Folder name in Google Drive
+            fileNamePrefix: 'CustomRegion_' + tileName,  // Prefix for file names
+            scale: 10,  // Resolution in meters
+            region: ee.Geometry(tile),  // Region of interest (current tile)
+            maxPixels: 1e13  // Max pixels limit (ensure you don't exceed Google Drive limits)
+        });
+        print('Export started for tile: ', tileName);
+    });
+    print('Batch submitted. Tiles: ' + startIndex + ' to ' + (endIndex - 1));
+    print('Total tiles in this batch: ', endIndex - startIndex);
+});
