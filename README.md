@@ -35,10 +35,6 @@ The script is intended for use in the Google Earth Engine (GEE) platform and pro
 - **Time Range**: January 1, 2024, to December 31, 2024.
 - **Cloud Cover Filter**: Images with less than 10% cloud cover are selected.
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Acknowledgements
 
 - [Google Earth Engine](https://earthengine.google.com/)
